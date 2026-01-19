@@ -1,16 +1,19 @@
-BINARY = opendps
-
 # Build with commandline interface rather than serial interface
 COMMANDLINE := 0
 
-# The baudrate used for serial communications, defaults to 115200
-BAUDRATE ?= 115200
+# The baudrate used for serial communications, defaults to 9600
+BAUDRATE ?= 9600
 
 # Set build model, defaults to DPS5005
 MODEL := DPS5005
 
+BINARY = opendps_$(MODEL)
+
 # Include splash screen
 SPLASH_SCREEN := 0
+
+# Include support for thermal lockout via the serial interface
+THERMAL_LOCKOUT := 0
 
 # Build wifi version (only change being that the wifi icon will start flashing
 # on power up)
@@ -23,6 +26,9 @@ WIFI := 1
 
 # Print debug information on the serial output
 DEBUG ?= 0
+
+# enable HW watchdog
+WDOG ?= 1
 
 # Font file
 METER_FONT_FILE ?= gfx/Ubuntu-C.ttf
@@ -46,8 +52,23 @@ TINT ?= ffffff
 # Enable CC mode
 CC_ENABLE ?= 1
 
-# Enable merged mode
-MERGED_ENABLE ?= 1
+# Enable CV mode
+CV_ENABLE ?= 1
+
+# Enable cl mode
+CL_ENABLE ?= 1
+
+# Enable function generator mode
+FUNCGEN_ENABLE ?= 1
+
+# Enable invert color feature
+INVERT_ENABLE ?= 0
+
+# Power buttons in color
+POWER_COLORED ?= 1
+
+# Power off button visible
+POWER_OFF_VISIBLE ?= 0
 
 GIT_VERSION := $(shell git describe --abbrev=4 --dirty --always --tags)
 CFLAGS = -I. -DGIT_VERSION=\"$(GIT_VERSION)\" -Wno-missing-braces
@@ -73,7 +94,6 @@ OBJS = \
     crc16.o \
     uui.o \
     uui_number.o \
-    func_cv.o \
     settings_calibration.o \
     hw.o \
     pwrctl.o \
@@ -93,11 +113,11 @@ OBJS = \
     gfx-cc.o \
     gfx-crosshair.o \
     gfx-cv.o \
-    gfx-merged.o \
+    gfx-cl.o \
     gfx-padlock.o \
-    gfx-power.o \
     gfx-thermometer.o \
-    gfx-wifi.o
+    gfx-wifi.o \
+    opendps.o
 
 ifdef MAX_CURRENT
 	CFLAGS +=-DCONFIG_DPS_MAX_CURRENT=$(MAX_CURRENT)
@@ -108,14 +128,45 @@ ifeq ($(DEBUG),1)
 	OBJS += dbg_printf.o
 endif
 
+ifeq ($(WDOG),1)
+	CFLAGS +=-DCONFIG_WDOG
+	OBJS += wdog.o
+endif
+
+
+ifeq ($(INVERT_ENABLE),1)
+	CFLAGS +=-DCONFIG_INVERT_ENABLE
+endif
+
+ifeq ($(POWER_COLORED),1)
+	CFLAGS +=-DCONFIG_POWER_COLORED
+	OBJS += gfx-poweron.o gfx-poweroff.o
+else
+	OBJS += gfx-power.o
+endif
+
+ifeq ($(POWER_OFF_VISIBLE),1)
+	CFLAGS +=-DCONFIG_POWER_OFF_VISIBLE
+endif
+
 ifeq ($(CC_ENABLE),1)
 	CFLAGS +=-DCONFIG_CC_ENABLE
 	OBJS += func_cc.o
 endif
 
-ifeq ($(MERGED_ENABLE),1)
-	CFLAGS +=-DCONFIG_MERGED_ENABLE
-	OBJS += func_merged.o
+ifeq ($(CV_ENABLE),1)
+	CFLAGS +=-DCONFIG_CV_ENABLE
+	OBJS += func_cv.o
+endif
+
+ifeq ($(CL_ENABLE),1)
+	CFLAGS +=-DCONFIG_CL_ENABLE
+	OBJS += func_cl.o
+endif
+
+ifeq ($(FUNCGEN_ENABLE),1)
+	CFLAGS +=-DCONFIG_FUNCGEN_ENABLE
+	OBJS += func_gen.o uui_icon.o gfx-square.o gfx-saw.o gfx-sin.o
 endif
 
 ifeq ($(SPLASH_SCREEN),1)
@@ -134,6 +185,10 @@ else
 	OBJS += uframe.o protocol.o protocol_handler.o
 endif
 
+ifeq ($(THERMAL_LOCKOUT),1)
+	CFLAGS +=-DCONFIG_THERMAL_LOCKOUT
+endif
+
 include ../libopencm3.target.mk
 
 fonts:
@@ -148,3 +203,4 @@ test:
 
 doxygen:
 	@doxygen config.dox
+

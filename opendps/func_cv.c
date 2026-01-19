@@ -41,7 +41,7 @@
  * constant voltage and current limit. When power is enabled it will continously
  * display the current output voltage and current draw. If the user edits one
  * of the values when power is eabled, the other will continue to be updated.
- * Thid allows for ramping the voltage and obsering the current increase.
+ * This allows for ramping the voltage and obsering the current increase.
  */
 
 static void cv_enable(bool _enable);
@@ -102,8 +102,8 @@ ui_number_t cv_current = {
     .min = 0,
     .max = CONFIG_DPS_MAX_CURRENT,
     .si_prefix = si_milli,
-    .num_digits = 1,
-    .num_decimals = 3,
+    .num_digits = CURRENT_DIGITS,
+    .num_decimals = CURRENT_DECIMALS,
     .unit = unit_ampere,
     .changed = &current_changed,
 };

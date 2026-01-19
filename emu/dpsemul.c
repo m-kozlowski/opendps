@@ -37,6 +37,7 @@
 #include "event.h"
 #include "tft.h"
 #include "dbg_printf.h"
+#include "uframe.h"
 
 #define UDP_RX_BUF_LEN       (512)
 #define DPS_PORT            (5005)
@@ -58,10 +59,15 @@ struct sockaddr_in comm_client_sock;
  * @param      frame   The frame
  * @param[in]  length  The length
  */
-void dps_emul_send_frame(uint8_t *frame, uint32_t length)
+void dps_emul_send_frame(frame_t *frame)
 {
     int slen = sizeof(comm_client_sock);
-    if (sendto(comm_sock, frame, length, 0, (struct sockaddr*) &comm_client_sock, slen) == -1) {
+
+    printf("[Com] Transmitted %u bytes\n", frame->length);
+    for (uint32_t i = 0; i < frame->length; ++i)
+         printf(" 0x%02X\n", frame->buffer[i]);
+
+    if (sendto(comm_sock, frame->buffer, frame->length, 0, (struct sockaddr*) &comm_client_sock, slen) == -1) {
         printf("Error: sendto()\n");
     }
 }

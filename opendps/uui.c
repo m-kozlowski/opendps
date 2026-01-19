@@ -95,7 +95,7 @@ void uui_refresh(uui_t *ui, bool force)
             item->needs_redraw = false;
         }
     }
-    tft_blit((uint16_t*) screen->icon_data, screen->icon_width, screen->icon_height, 48, 128-screen->icon_height);
+    tft_blit((uint16_t*) screen->icon_data, screen->icon_width, screen->icon_height, XPOS_ICON, 128-screen->icon_height);
 }
 
 void uui_activate(uui_t *ui)
@@ -113,7 +113,7 @@ void uui_activate(uui_t *ui)
         }
         /** @todo: add activation callback for each screen allowing for updating of U/I settings */
         uui_refresh(ui, true);
-        tft_blit((uint16_t*) screen->icon_data, screen->icon_width, screen->icon_height, 48, 128-screen->icon_height);
+        tft_blit((uint16_t*) screen->icon_data, screen->icon_width, screen->icon_height, XPOS_ICON, 128-screen->icon_height);
         if (screen->activated) {
             screen->activated();
         }
@@ -214,19 +214,23 @@ void uui_handle_screen_event(uui_t *ui, event_t event)
 void uui_next_screen(uui_t *ui)
 {
     uint32_t new_screen = (ui->cur_screen + 1) % ui->num_screens;
-    if (ui->screens[ui->cur_screen]->deactivated) {
-        ui->screens[ui->cur_screen]->deactivated();
+    if (ui->num_screens > 1) {
+        if (ui->screens[ui->cur_screen]->deactivated) {
+            ui->screens[ui->cur_screen]->deactivated();
+        }
+        uui_set_screen(ui, new_screen);
     }
-    uui_set_screen(ui, new_screen);
 }
 
 void uui_prev_screen(uui_t *ui)
 {
     uint32_t new_screen = ui->cur_screen ? ui->cur_screen -1 : ui->num_screens - 1;
-    if (ui->screens[ui->cur_screen]->deactivated) {
-        ui->screens[ui->cur_screen]->deactivated();
+    if (ui->num_screens > 1) {
+        if (ui->screens[ui->cur_screen]->deactivated) {
+            ui->screens[ui->cur_screen]->deactivated();
+        }
+        uui_set_screen(ui, new_screen);
     }
-    uui_set_screen(ui, new_screen);
 }
 
 void uui_set_screen(uui_t *ui, uint32_t screen_idx)

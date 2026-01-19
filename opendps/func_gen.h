@@ -1,7 +1,7 @@
 /*
  * The MIT License (MIT)
  *
- * Copyright (c) 2018 Johan Kanflo (github.com/kanflo)
+ * Copyright (c) 2019 Cyril Russo (github.com/X-Ryl669)
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -22,16 +22,17 @@
  * THE SOFTWARE.
  */
 
-#ifndef __FUNC_MERGED_H__
-#define __FUNC_MERGED_H__
+#ifndef __FUNC_GEN_H__
+#define __FUNC_GEN_H__
 
 #include "uui.h"
 
 /**
- * @brief      Add the CV function to the UI
+ * @brief      Add the function generator to the UI
  *
  * @param      ui    The user interface
  */
-void func_merged_init(uui_t *ui);
+void func_gen_init(uui_t *ui);
 
-#endif // __FUNC_MERGED_H__
+#endif // __FUNC_GEN_H__
+

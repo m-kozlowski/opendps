@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 
 """
 The MIT License (MIT)
@@ -35,8 +35,6 @@ time, add it tht the environment variable DPSIF.
 
 """
 
-from __future__ import print_function
-from __future__ import division
 
 import argparse
 import codecs
@@ -58,15 +56,7 @@ from protocol import (create_cmd, create_enable_output, create_lock, create_set_
                       create_set_function, create_set_parameter, create_temperature, create_set_brightness,
                       create_upgrade_data, create_upgrade_start, create_change_screen,
                       unpack_cal_report, unpack_query_response, unpack_version_response)
-from uhej import uhej
 
-try:
-    from PyCRC.CRCCCITT import CRCCCITT
-except ImportError:
-    print("Missing dependency pycrc:")
-    print(" sudo pip{} install pycrc"
-          .format("3" if sys.version_info.major == 3 else ""))
-    raise SystemExit()
 try:
     import serial
 except ImportError:
@@ -140,6 +130,55 @@ class tty_interface(comm_interface):
             b = self._port_handle.read(1)
             if not b:  # timeout
                 break
+            b = ord(b)
+            if b == uframe._SOF:
+                bytes_ = bytearray()
+                sof = True
+            if sof:
+                bytes_.append(b)
+            if b == uframe._EOF:
+                break
+        return bytes_
+
+
+class tcp_interface(comm_interface):
+    """
+    A class that describes a TCP interface
+    """
+
+    _socket = None
+
+    def __init__(self, if_name):
+        super(tcp_interface, self).__init__(if_name)
+
+        self._if_name = if_name
+
+    def open(self):
+        try:
+            self._socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            self._socket.settimeout(1.0)
+            self._socket.connect((self._if_name, 5005))
+        except socket.error:
+            return False
+        return True
+
+    def close(self):
+        self._socket.close()
+        self._socket = None
+        return True
+
+    def write(self, bytes_):
+        try:
+            self._socket.send(bytes_)
+        except socket.error as msg:
+            fail("{} ({:d})".format(str(msg[0]), msg[1]))
+        return True
+
+    def read(self):
+        bytes_ = bytearray()
+        sof = False
+        while True:
+            b = self._socket.recv(1)
             b = ord(b)
             if b == uframe._SOF:
                 bytes_ = bytearray()
@@ -558,6 +597,12 @@ def chunk_from_file(filename, chunk_size):
             else:
                 break
 
+def crc16xmodem(data: bytes):
+    crc = 0
+    for octet in data:
+        crc = uframe.crc16_ccitt(crc, octet)
+
+    return crc
 
 def run_upgrade(comms, fw_file_name, args):
     """
@@ -568,7 +613,7 @@ def run_upgrade(comms, fw_file_name, args):
         content = file.read()
         if codecs.encode(content, 'hex')[6:8] != b'20' and not args.force:
             fail("The firmware file does not seem valid, use --force to force upgrade")
-        crc = CRCCCITT().calculate(content)
+        crc = crc16xmodem(content)
     chunk_size = 1024
     ret_dict = communicate(comms, create_upgrade_start(chunk_size, crc), args)
     if ret_dict["status"] == protocol.UPGRADE_CONTINUE:
@@ -652,6 +697,8 @@ def create_comms(args):
     if if_name is not None:
         if is_ip_address(if_name):
             comms = udp_interface(if_name)
+        elif if_name[0:4] == "tcp:":
+            comms = tcp_interface(if_name[4:])
         else:
             comms = tty_interface(if_name, args.baudrate)
     else:
@@ -670,7 +717,7 @@ def do_calibration(comms, args):
     print("\t2 stable input voltages\r\n")
     print("Please ensure nothing is connected to the output of the DPS before starting calibration!\r\n")
 
-    t = raw_input("Would you like to proceed? (y/n): ")
+    t = input("Would you like to proceed? (y/n): ")
     if t.lower() != 'y':
         return
 
@@ -683,13 +730,19 @@ def do_calibration(comms, args):
 
     print("Please hook up the first lower supply voltage to the DPS now")
     print("ensuring that the serial connection is connected after boot")
-    calibration_input_voltage.append(float(raw_input("Type input voltage in mV: ")))
+    calibration_input_voltage.append(float(input("Type input voltage in mV: ")))
     calibration_vin_adc.append(get_average_calibration_result(comms, 'vin_adc'))
 
     # Do second Voltage Hookup
     print("\r\nPlease hook up the second higher supply voltage to the DPS now")
     print("ensuring that the serial connection is connected after boot")
-    calibration_input_voltage.append(float(raw_input("Type input voltage in mV: ")))
+    calibration_input_voltage.append(float(input("Type input voltage in mV: ")))
+    
+    # Ensure that we are still on the settings screen
+    communicate(comms, create_change_screen(protocol.CHANGE_SCREEN_SETTINGS), args, quiet=True)
+    time.sleep(1)
+    
+    # Measure and record the new input voltage
     calibration_vin_adc.append(get_average_calibration_result(comms, 'vin_adc'))
 
     # Calculate and set the Vin_ADC coeffecients
@@ -747,6 +800,10 @@ def do_calibration(comms, args):
         k, _ = best_fit(output_dac[x:x+2], output_adc[x:x+2])
         output_gradient.append(k)
 
+    # Initialise max_v_dac to being the last sample, this will be overridden
+    # if the output is non-linear
+    max_v_dac = max(output_dac)
+
     # If the gradient is near zero then we know this is our maximum
     for x in range(len(output_gradient)):
         if output_gradient[x] < 0.1:
@@ -775,7 +832,8 @@ def do_calibration(comms, args):
     args.parameter = ["V_DAC={}".format(output_dac)]
     payload = create_set_parameter(args.parameter)
     communicate(comms, payload, args, quiet=True)
-    calibration_real_voltage.append(float(raw_input("Type measured voltage on output in mV: ")))
+    communicate(comms, create_enable_output("on"), args, quiet=True)  # Turn the output on
+    calibration_real_voltage.append(float(input("Type measured voltage on output in mV: ")))
     calibration_v_adc.append(get_average_calibration_result(comms, 'vout_adc'))
     calibration_v_dac.append(output_dac)
 
@@ -784,7 +842,7 @@ def do_calibration(comms, args):
     args.parameter = ["V_DAC={}".format(output_dac)]
     payload = create_set_parameter(args.parameter)
     communicate(comms, payload, args, quiet=True)
-    calibration_real_voltage.append(float(raw_input("Type measured voltage on output in mV: ")))
+    calibration_real_voltage.append(float(input("Type measured voltage on output in mV: ")))
     calibration_v_adc.append(get_average_calibration_result(comms, 'vout_adc'))
     calibration_v_dac.append(output_dac)
 
@@ -839,9 +897,9 @@ def do_calibration(comms, args):
         plt.show()
 
     print("\r\nOutput Current Calibration:")
-    max_dps_current = float(raw_input("Max output current of your DPS (e.g 5 for the DPS5005) in amps: "))
-    load_resistance = float(raw_input("Load resistance in ohms: "))
-    load_max_wattage = float(raw_input("Load wattage rating in watts: "))
+    max_dps_current = float(input("Max output current of your DPS (e.g 5 for the DPS5005) in amps: "))
+    load_resistance = float(input("Load resistance in ohms: "))
+    load_max_wattage = float(input("Load wattage rating in watts: "))
 
     # There are three potential limiting factors for the output voltage, these are:
     output_voltage_based_on_input_voltage_mv = calibration_input_voltage[1] * 0.9  # 90% of input voltage
@@ -852,7 +910,7 @@ def do_calibration(comms, args):
 
     # The more max_output_voltage_mv is maximised the more accurate the results of the current calibration will be
 
-    raw_input("Please connect the load to the output of the DPS, then press enter")
+    input("Please connect the load to the output of the DPS, then press enter")
 
     # Take multiple current readings at different voltages and construct an Iout vs Iadc array
     print("Calibrating output current ADC", end='')
@@ -904,7 +962,7 @@ def do_calibration(comms, args):
         plt.show()
 
     print("\r\nConstant Current Calibration:")
-    raw_input("Please short the output of the DPS with a thick wire capable of carrying {}A, then press enter".format(max_dps_current))
+    input("Please short the output of the DPS with a thick wire capable of carrying {}A, then press enter".format(max_dps_current))
 
     # Set the V_DAC output to the maximum
     args.parameter = ["V_DAC={}".format(4095)]
@@ -1028,6 +1086,7 @@ def uhej_worker_thread():
     """
     The worker thread used by uHej for service discovery
     """
+    from uhej import uhej
     global discovery_list
     global sock
     while 1:
@@ -1059,6 +1118,7 @@ def uhej_scan():
     """
     Scan for OpenDPS devices on the local network
     """
+    from uhej import uhej
     global discovery_list
     global sock
     discovery_list = {}
@@ -1108,8 +1168,8 @@ def main():
     testing = '--testing' in sys.argv
     parser = argparse.ArgumentParser(description='Instrument an OpenDPS device')
 
-    parser.add_argument('-d', '--device', help="OpenDPS device to connect to. Can be a /dev/tty device or an IP number. If omitted, dpsctl.py will try the environment variable DPSIF", default='')
-    parser.add_argument('-b', '--baudrate', type=int, dest="baudrate", help="Set baudrate used for serial communications", default=115200)
+    parser.add_argument('-d', '--device', help="OpenDPS device to connect to. Can be a /dev/tty device, IP address for UDP protocol or tcp:IP for TCP protocol. If omitted, dpsctl.py will try the environment variable DPSIF", default='')
+    parser.add_argument('-b', '--baudrate', type=int, dest="baudrate", help="Set baudrate used for serial communications", default=9600)
     parser.add_argument('-B', '--brightness', type=int, help="Set display brightness (0..100)")
     parser.add_argument('-S', '--scan', action="store_true", help="Scan for OpenDPS wifi devices")
     parser.add_argument('-f', '--function', nargs='?', help="Set active function")

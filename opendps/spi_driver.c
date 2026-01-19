@@ -29,6 +29,7 @@
 #include <spi.h>
 #include <errno.h>
 #include "spi_driver.h"
+#include "hw.h"
 
 /** Used to keep track of the SPI DMA status */
 typedef enum {
@@ -52,7 +53,7 @@ void spi_init(void)
 
     rcc_periph_clock_enable(RCC_SPI2);
     rcc_periph_clock_enable(RCC_DMA1);
-    spi_reset(SPI2);
+    rcc_periph_reset_pulse(RST_SPI2);
     SPI2_I2SCFGR = 0;
     spi_init_master(SPI2, SPI_CR1_BAUDRATE_FPCLK_DIV_2, SPI_CR1_CPOL_CLK_TO_1_WHEN_IDLE, SPI_CR1_CPHA_CLK_TRANSITION_2, SPI_CR1_DFF_8BIT, SPI_CR1_MSBFIRST);
 
@@ -87,6 +88,10 @@ bool spi_dma_transceive(uint8_t *tx_buf, uint32_t tx_len, uint8_t *rx_buf, uint3
     while (SPI_SR(SPI2) & (SPI_SR_RXNE | SPI_SR_OVR)) {
         temp = SPI_DR(SPI2);
     }
+
+#ifdef TFT_CSN_PORT
+    gpio_clear(TFT_CSN_PORT, TFT_CSN_PIN);
+#endif
 
     dma_status = spi_idle;
 
@@ -135,6 +140,10 @@ bool spi_dma_transceive(uint8_t *tx_buf, uint32_t tx_len, uint8_t *rx_buf, uint3
     while (dma_status != spi_idle) ;
     while (!(SPI_SR(SPI2) & SPI_SR_TXE)) ;
     while (SPI_SR(SPI2) & SPI_SR_BSY) ;
+
+#ifdef TFT_CSN_PORT
+    gpio_set(TFT_CSN_PORT, TFT_CSN_PIN);
+#endif
 
 #ifndef SPI_NSS_GROUNDED
     gpio_set(GPIOB, GPIO12);

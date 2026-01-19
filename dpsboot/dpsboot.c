@@ -79,8 +79,8 @@ static uint16_t fw_crc16;
 
 static upgrade_reason_t reason = reason_unknown;
 
-static void handle_frame(uint8_t *frame, uint32_t length);
-static void send_frame(uint8_t *frame, uint32_t length);
+static void handle_frame(uint8_t *payload, uint32_t length);
+static void send_frame(const frame_t *frame);
 
 /**
   * @brief Send ack to upgrade start and do some book keeping
@@ -88,16 +88,17 @@ static void send_frame(uint8_t *frame, uint32_t length);
   */
 static void send_start_response(void)
 {
-    DECLARE_FRAME(MAX_FRAME_LENGTH);
-    PACK8(cmd_response | cmd_upgrade_start);
-    PACK8(upgrade_continue);
-    PACK16(chunk_size);
-    PACK8(reason);
-    FINISH_FRAME();
+    frame_t frame;
+    set_frame_header(&frame);
+    pack8(&frame, cmd_response | cmd_upgrade_start);
+    pack8(&frame, upgrade_continue);
+    pack16(&frame, chunk_size);
+    pack8(&frame, reason);
+    end_frame(&frame);
     uint32_t setting = 1;
     (void) past_write_unit(&past, past_upgrade_started, (void*) &setting, sizeof(setting));
     cur_flash_address = (uint32_t) &_app_start;
-    send_frame(_buffer, _length);
+    send_frame(&frame);
 }
 
 /**
@@ -173,38 +174,37 @@ static inline bool flash_write32(uint32_t address, uint32_t data)
   * @param length length of frame
   * @retval None
   */
-static void send_frame(uint8_t *frame, uint32_t length)
+static void send_frame(const frame_t *frame)
 {
-    do {
-        usart_send_blocking(USART1, *frame);
-        frame++;
-    } while(--length);
+    for (uint32_t i = 0; i < frame->length; ++i)
+        usart_send_blocking(USART1, frame->buffer[i]);
 }
 
 /**
-  * @brief Handle a receved frame
+  * @brief Handle a received frame
   * @param frame the received frame
   * @param length length of frame
   * @retval None
   */
-static void handle_frame(uint8_t *frame, uint32_t length)
+static void handle_frame(uint8_t *payload, uint32_t length)
 {
     command_t cmd = cmd_response;
-    uint8_t *payload;
     upgrade_status_t status;
-    int32_t payload_len = uframe_extract_payload(frame, length);
-    payload = frame; // Why? Well, frame now points to the payload
+    int32_t payload_len = uframe_extract_payload_inplace(payload, length);
+
     if (payload_len > 0) {
-        cmd = frame[0];
+        cmd = payload[0];
         switch(cmd) {
             case cmd_upgrade_start:
             {
                 {
-                    DECLARE_UNPACK(payload, length);
-                    UNPACK8(cmd);
-                    UNPACK16(chunk_size);
+                    frame_t frame;
+                    uframe_from_extracted_payload(&frame, payload, payload_len);
+                    start_frame_unpacking(&frame);
+                    unpack8(&frame, &cmd);
+                    unpack16(&frame, &chunk_size);
                     chunk_size = MIN(MAX_CHUNK_SIZE, chunk_size);
-                    UNPACK16(fw_crc16);
+                    unpack16(&frame, &fw_crc16);
                 }
                 send_start_response();
                 break;
@@ -229,7 +229,7 @@ static void handle_frame(uint8_t *frame, uint32_t length)
                             /** Note, payload contains 1 frame type byte and N bytes data */
                             for (uint32_t i = 0; i < (uint32_t) chunk_length; i+=4) {
                                 word = payload[i+4] << 24 | payload[i+3] << 16 | payload[i+2] << 8 | payload[i+1];
-                                /** @todo: Handle binaries not size aliged to 4 bytes */
+                                /** @todo: Handle binaries not size aligned to 4 bytes */
                                 if (!flash_write32(cur_flash_address+i, word)) {
                                     status = upgrade_flash_error;
                                     break;
@@ -244,11 +244,12 @@ static void handle_frame(uint8_t *frame, uint32_t length)
                     }
                 }
                 {
-                    DECLARE_FRAME(MAX_FRAME_LENGTH);
-                    PACK8(cmd_response | cmd_upgrade_data);
-                    PACK8(status);
-                    FINISH_FRAME();
-                    send_frame(_buffer, _length);
+                    frame_t frame_resp;
+                    set_frame_header(&frame_resp);
+                    pack8(&frame_resp, cmd_response | cmd_upgrade_data);
+                    pack8(&frame_resp, status);
+                    end_frame(&frame_resp);
+                    send_frame(&frame_resp);
                     if (status == upgrade_success) {
                         usart_wait_send_ready(USART1); /** make sure FIFO is empty */
                         (void) past_erase_unit(&past, past_upgrade_started);

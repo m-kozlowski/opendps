@@ -41,28 +41,43 @@
 #include "serialhandler.h"
 #include "ili9163c.h"
 #include "gfx-padlock.h"
+#ifdef CONFIG_THERMAL_LOCKOUT
 #include "gfx-thermometer.h"
+#endif // CONFIG_THERMAL_LOCKOUT
+#ifdef CONFIG_POWER_COLORED
+#include "gfx-poweron.h"
+#ifdef CONFIG_POWER_OFF_VISIBLE
+#include "gfx-poweroff.h"
+#endif //CONFIG_POWER_OFF_VISIBLE
+#else
 #include "gfx-power.h"
+#endif //CONFIG_POWER_COLORED
 #include "gfx-wifi.h"
 #include "font-full_small.h"
 #include "font-meter_small.h"
 #include "font-meter_medium.h"
 #include "font-meter_large.h"
 #include "gpio.h"
+#include "wdog.h"
 #include "past.h"
 #include "pastunits.h"
 #include "uui.h"
 #include "uui_number.h"
 #include "opendps.h"
-#include "func_cv.h"
 #include "settings_calibration.h"
 #include "my_assert.h"
+#ifdef CONFIG_CV_ENABLE
+#include "func_cv.h"
+#endif // CONFIG_CV_ENABLE
 #ifdef CONFIG_CC_ENABLE
 #include "func_cc.h"
 #endif // CONFIG_CC_ENABLE
-#ifdef CONFIG_MERGED_ENABLE
-#include "func_merged.h"
-#endif // CONFIG_MERGED_ENABLE
+#ifdef CONFIG_CL_ENABLE
+#include "func_cl.h"
+#endif // CONFIG_CL_ENABLE
+#ifdef CONFIG_FUNCGEN_ENABLE
+#include "func_gen.h"
+#endif // CONFIG_FUNCGEN_ENABLE
 
 #ifdef DPS_EMULATOR
 #include "dpsemul.h"
@@ -83,7 +98,8 @@
 
 /** Blit positions */
 #define XPOS_WIFI     (4)
-#define XPOS_LOCK    (30)
+#define XPOS_LOCK    (27)
+#define XPOS_INVOLT  (108) /* Right aligned to this position */
 
 /** Constants describing how certain things on the screen flash when needed */
 #define WIFI_CONNECTING_FLASHING_PERIOD  (1000)
@@ -126,9 +142,11 @@ static bool is_enabled;
 /** Last settings written to past */
 static bool     last_tft_inv_setting;
 
+#ifdef CONFIG_THERMAL_LOCKOUT
 /** Temperature readings, invalid at start */
 static int16_t temp1 = INVALID_TEMPERATURE;
 static int16_t temp2 = INVALID_TEMPERATURE;
+#endif // CONFIG_THERMAL_LOCKOUT
 
 /** display brightness
     73% is closest to previous default (0x5DC0) */
@@ -138,9 +156,11 @@ static int8_t last_tft_brightness = 73;
  #define CONFIG_TEMPERATURE_ALERT_LEVEL  (500)
 #endif // CONFIG_TEMPERATURE_ALERT_LEVEL
 
+#ifdef CONFIG_THERMAL_LOCKOUT
 /** Temperature when the DPS goes into shutdown mode,
     in x10 degrees whatever-temperature-unit-you-prefer */
 static int16_t shutdown_temperature = CONFIG_TEMPERATURE_ALERT_LEVEL;
+#endif // CONFIG_THERMAL_LOCKOUT
 
 /** Our parameter storage */
 static past_t g_past = {
@@ -410,8 +430,13 @@ static void main_ui_tick(void)
     hw_get_adc_values(&i_out_raw, &v_in_raw, &v_out_raw);
     (void) i_out_raw;
     (void) v_out_raw;
+
+    // update input voltage value
     input_voltage.value = pwrctl_calc_vin(v_in_raw);
     input_voltage.ui.draw(&input_voltage.ui);
+
+    // Update power button
+    opendps_update_power_status(is_enabled);
 }
 
 /**
@@ -426,13 +451,19 @@ static void ui_init(void)
 
     /** Initialise the function screens */
     uui_init(&func_ui, &g_past);
+#ifdef CONFIG_CV_ENABLE
     func_cv_init(&func_ui);
+#endif // CONFIG_CV_ENABLE
 #ifdef CONFIG_CC_ENABLE
     func_cc_init(&func_ui);
 #endif // CONFIG_CC_ENABLE
-#ifdef CONFIG_MERGED_ENABLE
-    func_merged_init(&func_ui);
-#endif // CONFIG_MERGED_ENABLE
+#ifdef CONFIG_CL_ENABLE
+    func_cl_init(&func_ui);
+#endif // CONFIG_CL_ENABLE
+#ifdef CONFIG_FUNCGEN_ENABLE
+    func_gen_init(&func_ui);
+#endif // CONFIG_FUNCGEN_ENABLE
+
 
     /** Initialise the settings screens */
     uui_init(&settings_ui, &g_past);
@@ -441,7 +472,7 @@ static void ui_init(void)
     /** Initialise the main screens */
     uui_init(&main_ui, &g_past);
     number_init(&input_voltage);
-    input_voltage.ui.x = 105;
+    input_voltage.ui.x = XPOS_INVOLT;
     input_voltage.ui.y = ui_height - font_meter_small_height;
     uui_add_screen(&main_ui, &main_screen);
 
@@ -462,10 +493,12 @@ static void ui_handle_event(event_t event, uint8_t data)
     if (event == event_rot_press && data == press_long) {
         opendps_lock(!is_locked);
         return;
+#ifdef CONFIG_INVERT_ENABLE
     } else if (event == event_button_sel && data == press_long) {
         tft_invert(!tft_is_inverted());
         write_past_settings();
         return;
+#endif // CONFIG_INVERT_ENABLE
     }
 
     if (is_locked) {
@@ -560,6 +593,7 @@ void opendps_lock(bool lock)
     }
 }
 
+#ifdef CONFIG_THERMAL_LOCKOUT
 /**
   * @brief Lock or unlock the UI due to a temperature alarm
   * @param lock true for lock, false for unlock
@@ -587,6 +621,7 @@ void opendps_temperature_lock(bool lock)
         }
     }
 }
+#endif // CONFIG_THERMAL_LOCKOUT
 
 /**
   * @brief Do periodical updates in the UI
@@ -710,16 +745,38 @@ void opendps_update_wifi_status(wifi_status_t status)
   */
 void opendps_update_power_status(bool enabled)
 {
-    if (is_enabled != enabled) {
-        is_enabled = enabled;
-        if (is_enabled) {
-            tft_blit((uint16_t*) gfx_power, GFX_POWER_WIDTH, GFX_POWER_HEIGHT, ui_width-GFX_POWER_WIDTH, ui_height-GFX_POWER_HEIGHT);
-        } else {
-            tft_fill(ui_width-GFX_POWER_WIDTH, ui_height-GFX_POWER_HEIGHT, GFX_POWER_WIDTH, GFX_POWER_HEIGHT, bg_color);
-        }
+    is_enabled = enabled;
+
+    if (is_enabled) {
+#ifdef CONFIG_POWER_COLORED
+        tft_blit((uint16_t*) gfx_poweron,
+                GFX_POWERON_WIDTH, GFX_POWERON_HEIGHT,
+                TFT_WIDTH-GFX_POWERON_WIDTH, TFT_HEIGHT-GFX_POWERON_HEIGHT);
+#else
+        tft_blit((uint16_t*) gfx_power,
+                GFX_POWER_WIDTH, GFX_POWER_HEIGHT,
+                TFT_WIDTH-GFX_POWER_WIDTH, TFT_HEIGHT-GFX_POWER_HEIGHT);
+#endif //CONFIG_POWER_COLORED
+
+    } else {
+// red poweroff button visible only if colored and off_visible are set
+#ifdef CONFIG_POWER_COLORED
+#ifdef CONFIG_POWER_OFF_VISIBLE
+        tft_blit((uint16_t*) gfx_poweroff,
+                GFX_POWEROFF_WIDTH, GFX_POWEROFF_HEIGHT,
+                TFT_WIDTH-GFX_POWEROFF_WIDTH, TFT_HEIGHT-GFX_POWEROFF_HEIGHT);
+#else //not CONFIG_POWER_OFF_VISIBLE
+        tft_fill(ui_width-GFX_POWERON_WIDTH, ui_height-GFX_POWERON_HEIGHT, GFX_POWERON_WIDTH, GFX_POWERON_HEIGHT, bg_color);
+#endif //CONFIG_POWER_OFF_VISIBLE
+
+#else //not CONFIG_POWER_COLORED
+        tft_fill(ui_width-GFX_POWER_WIDTH, ui_height-GFX_POWER_HEIGHT, GFX_POWER_WIDTH, GFX_POWER_HEIGHT, bg_color);
+#endif //CONFIG_POWER_COLORED
+
     }
 }
 
+#ifdef CONFIG_THERMAL_LOCKOUT
 /**
   * @brief Set temperatures
   * @param temp1 first temperature we can deal with
@@ -750,6 +807,7 @@ void opendps_get_temperature(int16_t *_temp1, int16_t *_temp2, bool *temp_shutdo
     *_temp2 = temp2;
     *temp_shutdown = is_temperature_locked;
 }
+#endif // CONFIG_THERMAL_LOCKOUT
 
 /**
  * @brief      Upgrade was requested by the protocol handler
@@ -925,6 +983,10 @@ static void event_handler(void)
             }
             ui_handle_event(event, data);
         }
+
+#ifdef CONFIG_WDOG
+        wdog_kick();
+#endif // CONFIG_WDOG
     }
 }
 
@@ -982,6 +1044,9 @@ int main(int argc, char const *argv[])
     tft_clear();
     uui_refresh(current_ui, true);
 #endif // CONFIG_SPLASH_SCREEN
+#ifdef CONFIG_WDOG
+    wdog_init();
+#endif // CONFIG_WDOG
     event_handler();
     return 0;
 }
